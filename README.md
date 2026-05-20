@@ -1,6 +1,6 @@
-# 💑 Gestion De Gastos
+# 🏠 Gestion De Gastos
 
-Tracker de gastos compartidos para parejas. Clasifica gastos automáticamente por categoría y los guarda en Google Sheets en tiempo real.
+Tracker de gastos compartidos. Clasifica gastos automáticamente por categoría y los guarda en Google Sheets en tiempo real.
 
 ## ¿Cómo funciona?
 
