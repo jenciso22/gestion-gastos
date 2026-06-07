@@ -25,8 +25,9 @@ export default function Dashboard() {
 
   const loadData = useCallback(async () => {
     setSyncing(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { router.push('/auth'); return }
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { router.push('/auth'); return }
+    const user = session.user
 
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     if (!prof) { router.push('/auth'); return }
