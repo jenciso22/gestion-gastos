@@ -22,22 +22,24 @@ export default function AuthPage() {
       if (signUpError) { setError(signUpError.message); setLoading(false); return }
       if (data.user) {
         await supabase.from('profiles').insert({ id: data.user.id, name, email })
-        // Create individual couple (no partner yet)
         const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase()
         await supabase.from('couples').insert({ user_a: data.user.id, invite_code: inviteCode })
+        router.refresh()
         router.push('/dashboard')
       }
     } else {
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
       if (signInError) { setError('Email o contraseña incorrectos'); setLoading(false); return }
-      router.push('/dashboard')
+      if (data.session) {
+        router.refresh()
+        router.push('/dashboard')
+      }
     }
     setLoading(false)
   }
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', background: 'var(--bg)' }}>
-      {/* Header */}
       <div style={{ textAlign: 'center', marginBottom: '40px' }}>
         <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '3px', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '10px' }}>Finance Tracker</div>
         <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '32px', fontWeight: 800, letterSpacing: '-1px', lineHeight: 1.1 }}>
@@ -48,29 +50,19 @@ export default function AuthPage() {
         </div>
       </div>
 
-      {/* Form */}
       <div style={{ width: '100%', maxWidth: '360px' }}>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {mode === 'register' && (
-            <input
-              type="text" placeholder="Tu nombre" value={name}
-              onChange={e => setName(e.target.value)} required
-              style={inputStyle}
-            />
+            <input type="text" placeholder="Tu nombre" value={name}
+              onChange={e => setName(e.target.value)} required style={inputStyle} />
           )}
-          <input
-            type="email" placeholder="Email" value={email}
-            onChange={e => setEmail(e.target.value)} required
-            style={inputStyle}
-          />
-          <input
-            type="password" placeholder="Contraseña" value={password}
-            onChange={e => setPassword(e.target.value)} required minLength={6}
-            style={inputStyle}
-          />
+          <input type="email" placeholder="Email" value={email}
+            onChange={e => setEmail(e.target.value)} required style={inputStyle} />
+          <input type="password" placeholder="Contraseña" value={password}
+            onChange={e => setPassword(e.target.value)} required minLength={6} style={inputStyle} />
           {error && <div style={{ fontSize: '13px', color: 'var(--red)', textAlign: 'center' }}>{error}</div>}
           <button type="submit" disabled={loading} style={btnStyle}>
-            {loading ? '...' : mode === 'login' ? 'Entrar' : 'Crear cuenta'}
+            {loading ? 'Cargando...' : mode === 'login' ? 'Entrar' : 'Crear cuenta'}
           </button>
         </form>
 
