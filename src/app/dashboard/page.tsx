@@ -1,14 +1,14 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { classifyExpense, parseAmount, fmtMXN } from '@/types'
 import type { Expense, Profile, Couple } from '@/types'
 
 type Tab = 'add' | 'list' | 'dash' | 'config'
+type State = 'loading' | 'ready' | 'noauth'
 
 export default function Dashboard() {
-  const router = useRouter()
+  const [state, setState] = useState<State>('loading')
   const [tab, setTab] = useState<Tab>('add')
   const [profile, setProfile] = useState<Profile | null>(null)
   const [couple, setCouple] = useState<Couple | null>(null)
@@ -16,41 +16,24 @@ export default function Dashboard() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [syncing, setSyncing] = useState(true)
   const [resultMsg, setResultMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [selectedMonth, setSelectedMonth] = useState<string>('')
   const [inviteCode, setInviteCode] = useState('')
   const [joiningCode, setJoiningCode] = useState('')
   const [joinMsg, setJoinMsg] = useState('')
 
-  const loadData = useCallback(async () => {
-    setSyncing(true)
-
-    const { data: { session } } = await supabase.auth.getSession()
-    
-    if (!session?.user) {
-      await new Promise(r => setTimeout(r, 1000))
-      const { data: { session: session2 } } = await supabase.auth.getSession()
-      if (!session2?.user) {
-        router.push('/auth')
-        return
-      }
-    }
-
-    const user = session?.user || (await supabase.auth.getSession()).data.session?.user
-    if (!user) { router.push('/auth'); return }
-
-    const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-    if (!prof) { router.push('/auth'); return }
+  const loadData = useCallback(async (userId: string) => {
+    const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    if (!prof) { setState('noauth'); return }
     setProfile(prof)
 
     const { data: coupleData } = await supabase.from('couples').select('*')
-      .or(`user_a.eq.${user.id},user_b.eq.${user.id}`).single()
+      .or(`user_a.eq.${userId},user_b.eq.${userId}`).single()
     setCouple(coupleData)
 
     if (coupleData) {
       setInviteCode(coupleData.invite_code)
-      const partnerId = coupleData.user_a === user.id ? coupleData.user_b : coupleData.user_a
+      const partnerId = coupleData.user_a === userId ? coupleData.user_b : coupleData.user_a
       if (partnerId) {
         const { data: partner } = await supabase.from('profiles').select('*').eq('id', partnerId).single()
         setPartnerProfile(partner)
@@ -59,28 +42,23 @@ export default function Dashboard() {
         .eq('couple_id', coupleData.id).order('expense_date', { ascending: false })
       setExpenses(expData || [])
     }
-
-    setSyncing(false)
-  }, [router])
-
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        router.push('/auth')
-      } else if (event === 'SIGNED_IN' && session) {
-        loadData()
-      }
-    })
-
-    loadData()
-
-    return () => subscription.unsubscribe()
-  }, [loadData, router])
+    setState('ready')
+  }, [])
 
   useEffect(() => {
     const now = new Date()
     setSelectedMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
-  }, [])
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || (!session && event === 'INITIAL_SESSION')) {
+        setState('noauth')
+      } else if (session?.user) {
+        loadData(session.user.id)
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [loadData])
 
   async function addExpense() {
     if (!input.trim() || !profile || !couple) return
@@ -90,25 +68,17 @@ export default function Dashboard() {
     const words = (parsed.desc || input).trim().split(' ')
     const description = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
     const merchant = words[words.length - 1] || ''
-
     setLoading(true)
     setInput('')
     setResultMsg(null)
-
     const { data, error } = await supabase.from('expenses').insert({
-      user_id: profile.id,
-      couple_id: couple.id,
-      description,
-      amount: parsed.amount,
-      category: cat.name,
-      emoji: cat.emoji,
-      merchant,
-      paid_by: profile.name,
+      user_id: profile.id, couple_id: couple.id, description,
+      amount: parsed.amount, category: cat.name, emoji: cat.emoji,
+      merchant, paid_by: profile.name,
       expense_date: new Date().toISOString().split('T')[0],
     }).select().single()
-
     if (error) {
-      setResultMsg({ type: 'err', text: 'Error al guardar. Intenta de nuevo.' })
+      setResultMsg({ type: 'err', text: 'Error al guardar.' })
     } else {
       setExpenses(prev => [data, ...prev])
       setResultMsg({ type: 'ok', text: `${cat.emoji} $${parsed.amount.toLocaleString('es-MX')} — ${description} guardado` })
@@ -127,13 +97,38 @@ export default function Dashboard() {
     if (error) { setJoinMsg('Error al unirse'); return }
     if (couple) await supabase.from('couples').delete().eq('id', couple.id)
     setJoinMsg('¡Vinculados! 🎉')
-    setTimeout(() => loadData(), 1000)
+    setTimeout(() => loadData(profile.id), 1000)
   }
 
   async function signOut() {
     await supabase.auth.signOut()
-    router.push('/auth')
+    setState('noauth')
   }
+
+  // If not authenticated show login button
+  if (state === 'noauth') return (
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '32px' }}>
+      <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '28px', fontWeight: 800, letterSpacing: '-1px', marginBottom: '8px' }}>
+        Gestión de <span style={{ color: 'var(--accent)' }}>Gastos</span>
+      </div>
+      <div style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '32px' }}>Tu sesión expiró</div>
+      <a href="/auth" style={{ padding: '13px 32px', fontSize: '15px', fontWeight: 700, fontFamily: 'Syne, sans-serif', background: 'var(--accent)', color: '#0e0e0e', borderRadius: '8px', textDecoration: 'none' }}>
+        Iniciar sesión
+      </a>
+    </div>
+  )
+
+  if (state === 'loading') return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 800, color: 'var(--accent)', marginBottom: '8px' }}>Gestión de Gastos</div>
+        <div style={{ fontSize: '13px', color: 'var(--muted)' }}>Cargando...</div>
+      </div>
+    </div>
+  )
+
+  const partnerName = partnerProfile?.name || 'Sin pareja aún'
+  const hasPartner = !!couple?.user_b
 
   const monthExpenses = expenses.filter(e => {
     const d = new Date(e.expense_date)
@@ -147,28 +142,14 @@ export default function Dashboard() {
   monthExpenses.forEach(e => { cats[e.category] = (cats[e.category] || 0) + e.amount })
   const sortedCats = Object.entries(cats).sort((a, b) => b[1] - a[1])
   const maxCat = sortedCats[0]?.[1] || 1
-
   const availableMonths = [...new Set(expenses.map(e => {
     const d = new Date(e.expense_date)
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
   }))].sort().reverse()
-
   function monthLabel(key: string) {
     const [y, m] = key.split('-')
     return new Date(parseInt(y), parseInt(m) - 1, 1).toLocaleString('es-MX', { month: 'long', year: 'numeric' })
   }
-
-  if (syncing && !profile) return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 800, color: 'var(--accent)', marginBottom: '8px' }}>Gestión de Gastos</div>
-        <div style={{ fontSize: '13px', color: 'var(--muted)' }}>Cargando...</div>
-      </div>
-    </div>
-  )
-
-  const partnerName = partnerProfile?.name || 'Sin pareja aún'
-  const hasPartner = !!couple?.user_b
 
   return (
     <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
@@ -182,7 +163,7 @@ export default function Dashboard() {
         </div>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', background: 'rgba(74,222,128,0.12)', color: 'var(--green)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: '20px', padding: '3px 10px', marginTop: '8px' }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', animation: 'pulse 2s infinite' }}></div>
-          {syncing ? 'Sincronizando...' : `${expenses.length} gastos`}
+          {expenses.length} gastos sincronizados
         </div>
       </div>
 
@@ -274,9 +255,7 @@ export default function Dashboard() {
                 <option value={selectedMonth}>{monthLabel(selectedMonth)}</option>
               )}
             </select>
-            <button onClick={loadData} style={{ padding: '10px 14px', fontSize: '12px', background: 'var(--surface)', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: '8px', cursor: 'pointer' }}>
-              ↻
-            </button>
+            <button onClick={() => profile && loadData(profile.id)} style={{ padding: '10px 14px', fontSize: '12px', background: 'var(--surface)', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: '8px', cursor: 'pointer' }}>↻</button>
           </div>
           {monthExpenses.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--muted)' }}>
@@ -357,17 +336,10 @@ export default function Dashboard() {
           </button>
         </div>
       )}
-
       <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
     </div>
   )
 }
 
-const cardStyle: React.CSSProperties = {
-  background: 'var(--surface)', border: '1px solid var(--border)',
-  borderRadius: '12px', padding: '16px'
-}
-const cfgLabelStyle: React.CSSProperties = {
-  fontSize: '11px', fontWeight: 600, letterSpacing: '1.5px',
-  textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '10px'
-}
+const cardStyle: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }
+const cfgLabelStyle: React.CSSProperties = { fontSize: '11px', fontWeight: 600, letterSpacing: '1.5px', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '10px' }
