@@ -13,6 +13,16 @@ export type Couple = {
   created_at: string
 }
 
+export type Budget = {
+  id: string
+  couple_id: string | null
+  user_id: string
+  category: string
+  amount: number
+  month: number
+  year: number
+}
+
 export type Expense = {
   id: string
   user_id: string
