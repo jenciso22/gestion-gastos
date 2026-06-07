@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { classifyExpense, parseAmount, fmtMXN, CATEGORIES } from '@/types'
+import { classifyExpense, parseAmount, fmtMXN } from '@/types'
 import type { Expense, Profile, Couple } from '@/types'
 
 type Tab = 'add' | 'list' | 'dash' | 'config'
@@ -25,9 +25,20 @@ export default function Dashboard() {
 
   const loadData = useCallback(async () => {
     setSyncing(true)
+
     const { data: { session } } = await supabase.auth.getSession()
-    if (!session) { router.push('/auth'); return }
-    const user = session.user
+    
+    if (!session?.user) {
+      await new Promise(r => setTimeout(r, 1000))
+      const { data: { session: session2 } } = await supabase.auth.getSession()
+      if (!session2?.user) {
+        router.push('/auth')
+        return
+      }
+    }
+
+    const user = session?.user || (await supabase.auth.getSession()).data.session?.user
+    if (!user) { router.push('/auth'); return }
 
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     if (!prof) { router.push('/auth'); return }
@@ -44,7 +55,6 @@ export default function Dashboard() {
         const { data: partner } = await supabase.from('profiles').select('*').eq('id', partnerId).single()
         setPartnerProfile(partner)
       }
-
       const { data: expData } = await supabase.from('expenses').select('*')
         .eq('couple_id', coupleData.id).order('expense_date', { ascending: false })
       setExpenses(expData || [])
@@ -53,7 +63,19 @@ export default function Dashboard() {
     setSyncing(false)
   }, [router])
 
-  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        router.push('/auth')
+      } else if (event === 'SIGNED_IN' && session) {
+        loadData()
+      }
+    })
+
+    loadData()
+
+    return () => subscription.unsubscribe()
+  }, [loadData, router])
 
   useEffect(() => {
     const now = new Date()
@@ -101,11 +123,8 @@ export default function Dashboard() {
     if (!targetCouple) { setJoinMsg('Código no encontrado'); return }
     if (targetCouple.user_b) { setJoinMsg('Esta pareja ya está completa'); return }
     if (targetCouple.user_a === profile.id) { setJoinMsg('No puedes unirte a tu propio código'); return }
-
     const { error } = await supabase.from('couples').update({ user_b: profile.id }).eq('id', targetCouple.id)
     if (error) { setJoinMsg('Error al unirse'); return }
-
-    // Delete own couple
     if (couple) await supabase.from('couples').delete().eq('id', couple.id)
     setJoinMsg('¡Vinculados! 🎉')
     setTimeout(() => loadData(), 1000)
@@ -116,7 +135,6 @@ export default function Dashboard() {
     router.push('/auth')
   }
 
-  // Dashboard calculations
   const monthExpenses = expenses.filter(e => {
     const d = new Date(e.expense_date)
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -142,7 +160,10 @@ export default function Dashboard() {
 
   if (syncing && !profile) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
-      <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '16px', color: 'var(--accent)' }}>Cargando...</div>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '24px', fontWeight: 800, color: 'var(--accent)', marginBottom: '8px' }}>Gestión de Gastos</div>
+        <div style={{ fontSize: '13px', color: 'var(--muted)' }}>Cargando...</div>
+      </div>
     </div>
   )
 
@@ -151,7 +172,6 @@ export default function Dashboard() {
 
   return (
     <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
-      {/* Header */}
       <div style={{ padding: '24px 24px 0' }}>
         <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '2px', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '4px' }}>Finance Tracker</div>
         <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '26px', fontWeight: 800, letterSpacing: '-1px' }}>
@@ -162,11 +182,10 @@ export default function Dashboard() {
         </div>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', background: 'rgba(74,222,128,0.12)', color: 'var(--green)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: '20px', padding: '3px 10px', marginTop: '8px' }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', animation: 'pulse 2s infinite' }}></div>
-          {syncing ? 'Sincronizando...' : `${expenses.length} gastos sincronizados`}
+          {syncing ? 'Sincronizando...' : `${expenses.length} gastos`}
         </div>
       </div>
 
-      {/* Tabs */}
       <div style={{ display: 'flex', gap: '4px', padding: '16px 24px 0' }}>
         {(['add', 'list', 'dash', 'config'] as Tab[]).map((t, i) => (
           <button key={t} onClick={() => setTab(t)} style={{
@@ -182,7 +201,6 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* ADD TAB */}
       {tab === 'add' && (
         <div style={{ padding: '20px 24px 40px' }}>
           <p style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '10px' }}>
@@ -198,7 +216,6 @@ export default function Dashboard() {
               Agregar
             </button>
           </div>
-
           {resultMsg && (
             <div style={{ padding: '10px 14px', borderRadius: '8px', fontSize: '13px', marginBottom: '10px',
               background: resultMsg.type === 'ok' ? 'rgba(74,222,128,0.12)' : 'rgba(248,113,113,0.12)',
@@ -207,8 +224,6 @@ export default function Dashboard() {
               {resultMsg.text}
             </div>
           )}
-
-          {/* Recent */}
           {expenses.slice(0, 3).map(e => (
             <div key={e.id} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
               <span style={{ fontSize: '22px' }}>{e.emoji}</span>
@@ -222,7 +237,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* LIST TAB */}
       {tab === 'list' && (
         <div style={{ padding: '20px 24px 40px' }}>
           {expenses.length === 0 ? (
@@ -250,10 +264,9 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* DASHBOARD TAB */}
       {tab === 'dash' && (
         <div style={{ padding: '20px 24px 40px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
             <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
               style={{ flex: 1, padding: '10px 14px', fontSize: '14px', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', outline: 'none' }}>
               {availableMonths.map(k => <option key={k} value={k}>{monthLabel(k)}</option>)}
@@ -262,10 +275,9 @@ export default function Dashboard() {
               )}
             </select>
             <button onClick={loadData} style={{ padding: '10px 14px', fontSize: '12px', background: 'var(--surface)', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: '8px', cursor: 'pointer' }}>
-              ↻ Sync
+              ↻
             </button>
           </div>
-
           {monthExpenses.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--muted)' }}>
               <div style={{ fontSize: '40px', marginBottom: '12px' }}>📊</div>
@@ -278,20 +290,18 @@ export default function Dashboard() {
                 <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '40px', fontWeight: 800, letterSpacing: '-2px', color: 'var(--accent)' }}>{fmtMXN(total)}</div>
                 <div style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '4px' }}>{monthExpenses.length} transacciones</div>
               </div>
-
               <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
                 <div style={{ flex: 1, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', padding: '14px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--blue)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>👤 {profile?.name}</div>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--blue)', marginBottom: '6px', textTransform: 'uppercase' }}>👤 {profile?.name}</div>
                   <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '20px', fontWeight: 700 }}>{fmtMXN(myTotal)}</div>
                   <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '3px' }}>{total > 0 ? Math.round(myTotal / total * 100) : 0}%</div>
                 </div>
                 <div style={{ flex: 1, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', padding: '14px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--green)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>👤 {partnerName}</div>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--green)', marginBottom: '6px', textTransform: 'uppercase' }}>👤 {partnerName}</div>
                   <div style={{ fontFamily: 'Syne, sans-serif', fontSize: '20px', fontWeight: 700 }}>{fmtMXN(partnerTotal)}</div>
                   <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '3px' }}>{total > 0 ? Math.round(partnerTotal / total * 100) : 0}%</div>
                 </div>
               </div>
-
               <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '1.5px', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '10px' }}>Por categoría</div>
               {sortedCats.map(([cat, val]) => (
                 <div key={cat} style={{ display: 'flex', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
@@ -307,26 +317,19 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* CONFIG TAB */}
       {tab === 'config' && (
         <div style={{ padding: '20px 24px 40px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {/* Profile */}
           <div style={cardStyle}>
             <div style={cfgLabelStyle}>Mi cuenta</div>
             <div style={{ fontSize: '15px', fontWeight: 500 }}>{profile?.name}</div>
             <div style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '2px' }}>{profile?.email}</div>
           </div>
-
-          {/* Partner */}
           <div style={cardStyle}>
             <div style={cfgLabelStyle}>Pareja</div>
             {hasPartner ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'var(--green-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>👤</div>
-                <div>
-                  <div style={{ fontSize: '15px', fontWeight: 500 }}>{partnerProfile?.name}</div>
-                  <div style={{ fontSize: '12px', color: 'var(--green)' }}>✅ Vinculados</div>
-                </div>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: 500 }}>{partnerProfile?.name}</div>
+                <div style={{ fontSize: '12px', color: 'var(--green)', marginTop: '4px' }}>✅ Vinculados</div>
               </div>
             ) : (
               <>
@@ -348,8 +351,6 @@ export default function Dashboard() {
               </>
             )}
           </div>
-
-          {/* Sign out */}
           <button onClick={signOut}
             style={{ padding: '12px', fontSize: '14px', fontWeight: 600, fontFamily: 'Syne, sans-serif', background: 'rgba(248,113,113,0.1)', color: 'var(--red)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: '8px', cursor: 'pointer' }}>
             Cerrar sesión
@@ -357,11 +358,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <style>{`
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-        input::placeholder { color: var(--muted); }
-        select option { background: var(--surface); color: var(--text); }
-      `}</style>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
     </div>
   )
 }
