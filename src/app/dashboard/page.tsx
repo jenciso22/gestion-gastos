@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [joiningCode, setJoiningCode] = useState('')
   const [joinMsg, setJoinMsg] = useState('')
   const [budgetEdit, setBudgetEdit] = useState<Record<string, string>>({})
-  const [budgetMsg, setBudgetMsg] = useState('')
+  const [budgetMsg, setBudgetMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   const now = new Date()
   const currentMonth = now.getMonth() + 1
@@ -98,15 +98,20 @@ export default function Dashboard() {
   }
 
   async function deleteExpense(id: string) {
-    const { error } = await supabase.from('expenses').delete().eq('id', id)
-    if (!error) setExpenses(prev => prev.filter(e => e.id !== id))
+    if (!couple) return
+    const { error } = await supabase.from('expenses').delete().eq('id', id).eq('couple_id', couple.id)
+    if (error) {
+      alert('Error al borrar el gasto')
+    } else {
+      setExpenses(prev => prev.filter(e => e.id !== id))
+    }
   }
 
   async function saveBudgets() {
     if (!profile || !couple) return
-    setBudgetMsg('')
+    setBudgetMsg(null)
     const upserts = Object.entries(budgetEdit)
-      .filter(([_, val]) => val !== '' && !isNaN(Number(val)))
+      .filter(([_, val]) => val !== '' && !isNaN(Number(val)) && Number(val) > 0)
       .map(([category, amount]) => ({
         couple_id: couple.id,
         user_id: profile.id,
@@ -115,19 +120,22 @@ export default function Dashboard() {
         month: currentMonth,
         year: currentYear,
       }))
-    if (!upserts.length) return
+    if (!upserts.length) {
+      setBudgetMsg({ type: 'ok', text: 'Sin cambios para guardar' })
+      return
+    }
     const { error } = await supabase.from('budgets').upsert(upserts, {
       onConflict: 'couple_id,category,month,year'
     })
     if (error) {
-      setBudgetMsg('Error al guardar presupuestos')
+      setBudgetMsg({ type: 'err', text: 'Error al guardar presupuestos' })
     } else {
       const { data } = await supabase.from('budgets').select('*')
         .eq('couple_id', couple.id).eq('month', currentMonth).eq('year', currentYear)
       setBudgets(data || [])
       setBudgetEdit({})
-      setBudgetMsg('✅ Presupuestos guardados')
-      setTimeout(() => setBudgetMsg(''), 3000)
+      setBudgetMsg({ type: 'ok', text: '✅ Presupuestos guardados' })
+      setTimeout(() => setBudgetMsg(null), 3000)
     }
   }
 
@@ -343,7 +351,7 @@ export default function Dashboard() {
               </div>
               <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '1.5px', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '10px' }}>Por categoría</div>
               {sortedCats.map(([cat, val]) => {
-                const budget = getBudget(cat)
+                const budget = isCurrentMonth ? getBudget(cat) : 0
                 const pct = budget > 0 ? Math.min(Math.round(val / budget * 100), 100) : 0
                 const over = budget > 0 && val > budget
                 return (
@@ -403,7 +411,7 @@ export default function Dashboard() {
             style={{ width: '100%', marginTop: '8px', padding: '13px', fontSize: '15px', fontWeight: 700, fontFamily: 'Syne, sans-serif', background: 'var(--accent)', color: '#0e0e0e', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>
             Guardar presupuestos
           </button>
-          {budgetMsg && <div style={{ textAlign: 'center', fontSize: '13px', color: 'var(--green)', marginTop: '10px' }}>{budgetMsg}</div>}
+          {budgetMsg && <div style={{ textAlign: 'center', fontSize: '13px', color: budgetMsg.type === 'ok' ? 'var(--green)' : 'var(--red)', marginTop: '10px' }}>{budgetMsg.text}</div>}
         </div>
       )}
 
